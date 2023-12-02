@@ -2,7 +2,7 @@
 
 Team "Broke Boys Cartel" - Radmir Zosimov | Nikita Romanov
 
-<img src="imgs/awards.jpg" height="300"/>
+<img src="imgs/STP_4831.jpg" height="300"/>
 
 ## App Demo
 
