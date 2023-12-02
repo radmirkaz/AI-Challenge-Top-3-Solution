@@ -10,7 +10,7 @@ Team "Broke Boys Cartel" - Radmir Zosimov | Nikita Romanov
 
 #### > The presentation from the pitch is available [here](https://www.canva.com/design/DAFxp0j55M8/h5LdmGPCE45mOcjVdGbo6A/edit?utm_content=DAFxp0j55M8&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton)
 
-## EDA and Training code
+## EDA and Training code 
 
 Everything is neatly stored in the `aiijc_team_final_mod.ipynb`
 
