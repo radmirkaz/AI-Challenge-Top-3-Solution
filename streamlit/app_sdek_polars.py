@@ -640,7 +640,7 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
 
         st.divider()
 
-        supplier_to_plot = st.selectbox('Выберите поставщика для построения графиков:', sorted(df_train['Поставщик'].unique()))
+        supplier_to_plot = st.select_slider('Выберите поставщика для построения графиков:', sorted(df_train['Поставщик'].unique()))
 
         col1, col2 = st.columns(2)
 
@@ -705,7 +705,7 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
             # Создаем виджеты выбора значений для каждой колонки
             for column in columns_to_group:
                 unique_values = sorted(df_train[column].unique().tolist())
-                selected_values[column] = st.selectbox(f"Выберите значение для '{column}'", unique_values)
+                selected_values[column] = st.select_slider(f"Выберите значение для '{column}'", unique_values)
 
             if selected_values:
                 filtered_samples = get_filtered_samples(df_train, selected_values)
