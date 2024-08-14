@@ -260,14 +260,14 @@ def get_shap_values(df, model, cat_fts):
 
 def get_shap_percentage_list(shap_values, feature_names, threshold=1.0):
     total_sum = np.sum(np.abs(shap_values))
-    shap_values = (shap_values / total_sum) * 100
+    shap_values = (shap_values / total_sum) * 100 * -1
 
     filtered_indices = np.abs(shap_values) > threshold
     shap_values_filtered = shap_values[filtered_indices]
     feature_names_filtered = np.array(feature_names)[filtered_indices]
 
     sorted_indices = np.argsort(shap_values_filtered)
-    shap_values_sorted = shap_values_filtered[sorted_indices] # * -1
+    shap_values_sorted = shap_values_filtered[sorted_indices]
     feature_names_sorted = feature_names_filtered[sorted_indices]
 
     positive_shap_values = [max(value, 0) for value in shap_values_sorted]
@@ -285,7 +285,7 @@ def get_shap_percentage_list(shap_values, feature_names, threshold=1.0):
         if value > 0
     ][::-1]
 
-    print(top_increasing_risk)
+    # print(top_increasing_risk)
     st.markdown("### <span style='color:red'>&#x2193;</span> Факторы, увличивающие риск срыва поставки:", unsafe_allow_html=True)
     for item in top_increasing_risk:
         st.write(f"- {item}")
@@ -297,26 +297,31 @@ def get_shap_percentage_list(shap_values, feature_names, threshold=1.0):
 
 
 @st.cache_resource(show_spinner=False)
-def get_cat_counts_plot(df, sample, columns_to_draw):
-    plot_df = []
+def display_risk_info(df, sample, columns_to_draw):
+    st.markdown("### Историческая справка по выбранной поставке:", unsafe_allow_html=True)
+
+    # Группировка по всем колонкам из columns_to_draw и вычисление среднего процента успешных поставок
+    grouped_df = df.groupby(columns_to_draw)['y'].value_counts(normalize=True).unstack(fill_value=0)
+    grouped_on_time_rate = grouped_df[0].mean() * 100  # Средний процент своевременных поставок
+
     for col in columns_to_draw:
-        temp_df = df[df[col] == int(sample[col])]['y'].value_counts()
-        # print(col, temp_df)
-        plot_df.append({'Признак': col, 'В срок': np.log1p(temp_df[0]), 'Просрочка': np.log1p(temp_df[1])})
+        # Фильтрация данных по конкретному значению из образца
+        selected_sample_count = df[df[col] == int(sample[col])]['y'].value_counts(normalize=True)
+        overall_count = df[df[col] != int(sample[col])]['y'].value_counts(normalize=True)
 
-    plot_df = pd.DataFrame(plot_df)
-    # print('plot_df', plot_df)
+        # Процент своевременных поставок для текущего значения категории
+        sample_on_time_rate = selected_sample_count.get(0, 0) * 100  # 0 означает поставки "в срок"
 
-    fig = px.bar(plot_df, 
-                 x='Признак', 
-                 y=['В срок', 'Просрочка'], 
-                 color='Признак', 
-                 barmode='group',
-                 height=600)
-    
-    fig.update_layout(showlegend=True)
-    
-    st.plotly_chart(fig, use_container_width=True)
+        # Общий процент своевременных поставок по всему DataFrame для других значений этой категории
+        overall_on_time_rate = overall_count.get(0, 0) * 100  # 0 означает поставки "в срок"
+
+        message = f"Для категории **{col}** со значением **№{sample[col]}** поставки доставляются в срок в **{sample_on_time_rate:.1f}%** случаев. \n"
+        message += f"Средний показатель по другим значениям этой категории: **{overall_on_time_rate:.1f}%**"
+
+        st.markdown(f"- {message}")
+
+    st.markdown(f"Средний успех по всем похожим поставкам (сгруппированным по колонкам {', '.join(columns_to_draw)}): **{grouped_on_time_rate:.1f}%**")
+
 
 numeric_cols = ['До поставки',
                 'НРП',
@@ -615,7 +620,8 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
 
         col1.metric('Прогноз модели', sample['Прогноз'])
         col2.metric('Прогнозируемое время доставки', delivery_date, delta = early_time if sample['Прогноз'] == 'В срок' else late_time, delta_color = 'normal' if sample['Прогноз'] == 'В срок' else  'inverse')
-        col3.metric('Стандартность ситуации', str(sample['Уверенность'])+'%', delta = 'Обычная ситуация' if sample['Уверенность'] > 75 else 'Редкая ситуация', delta_color = 'normal' if sample['Уверенность'] > 75 else 'inverse')
+        # col3.metric('Стандартность ситуации', str(sample['Уверенность'])+'%', delta = 'Обычная ситуация' if sample['Уверенность'] > 75 else 'Редкая ситуация', delta_color = 'normal' if sample['Уверенность'] > 75 else 'inverse')
+        col3.metric('Вероятность срыва поставки', str(100 - sample['Уверенность'])+'%', delta = 'Низкая' if sample['Уверенность'] > 80 else 'Средняя', delta_color = 'normal' if sample['Уверенность'] > 80 else 'inverse')
         rv = round(int(sample['Поставщик']))
         if str(rv) in list(supp_stat.keys()):
             col4.metric('Рейтинг поставщика', supp_stat[str(rv)], delta = 'Высокий' if supp_stat[str(rv)] in ['5⭐', '4⭐'] else 'Низкий', delta_color = 'normal' if supp_stat[str(rv)] in ['5⭐', '4⭐'] else 'inverse')
@@ -644,19 +650,20 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
         with col1:
             get_shap_percentage_list(shap_values[0], feature_names, threshold=1.0)
 
-        st.divider() 
-
-        st.markdown('##### Анализ исторических данных для выбранного семпла')
-        # st.session_state.
-        # selected_column = st.selectbox('Выберите категоральный признак', cat_fts) ### ХУЙНЯ НЕ РАБОТАЕТ ЮБЮЛЯТЬ ЕЮБАГЫЯЙ СТРИМЛИТ Я ЕБАЛ ЕГО МАТЬ
-
-        cat_fts_to_draw = ['Поставщик', 'Категорийный менеджер', 'Операционный менеджер',
+        with col2:
+            cat_fts_to_draw = ['Поставщик', 'Категорийный менеджер', 'Операционный менеджер',
                     'Завод', 'Закупочная организация', 'Группа закупок', 'Балансовая единица',
                     'Группа материалов', 'Вариант поставки']
 
-        get_cat_counts_plot(df_train, pd.DataFrame(st.session_state.test.iloc[int(option)]).T, cat_fts_to_draw)
+            display_risk_info(df_train, sample, ['Поставщик', 'Категорийный менеджер', 'Операционный менеджер', 'Вариант поставки', 'Материал'])
 
         st.divider() 
+
+        # st.markdown('##### Анализ исторических данных для выбранного семпла')
+        # st.session_state.
+        # selected_column = st.selectbox('Выберите категоральный признак', cat_fts) ### ХУЙНЯ НЕ РАБОТАЕТ ЮБЮЛЯТЬ ЕЮБАГЫЯЙ СТРИМЛИТ Я ЕБАЛ ЕГО МАТЬ
+
+        # st.divider()
 
         download(st.session_state.test)
 
