@@ -25,8 +25,7 @@ import pandas as pd
 def reset():
     st.session_state.key += 1
 
-
-def reduce_mem_usage(props):
+def reduce_mem_usage_pd(props):
     start_mem_usg = props.memory_usage().sum() / 1024**2 
     # print("Memory usage of properties dataframe is :",start_mem_usg," MB")
     NAlist = [] # Keeps track of columns that have missing values filled in. 
@@ -80,18 +79,48 @@ def reduce_mem_usage(props):
             # Make float datatypes 32 bit
             else:
                 props[col] = props[col].astype(np.float32)
-            
-            # Print new column type
-            # print("dtype after: ",props[col].dtype)
-            # print("******************************")
-    
+
     # Print final result
-    print("___MEMORY USAGE AFTER COMPLETION:___")
+    # print("___MEMORY USAGE AFTER COMPLETION:___")
     mem_usg = props.memory_usage().sum() / 1024**2 
-    print("Memory usage is: ",mem_usg," MB")
-    print("This is ",100*mem_usg/start_mem_usg,"% of the initial size")
+    # print("Memory usage is: ",mem_usg," MB")
+    # print("This is ",100*mem_usg/start_mem_usg,"% of the initial size")
     return props
 
+def reduce_mem_usage_pl(df):
+    
+    start_mem = df.estimated_size("mb")
+    # print('Memory usage of dataframe is {:.2f} MB'.format(start_mem))
+    # pl.Uint8,pl.UInt16,pl.UInt32,pl.UInt64
+    Numeric_Int_types = [pl.Int8,pl.Int16,pl.Int32,pl.Int64]
+    Numeric_Float_types = [pl.Float32,pl.Float64]
+    
+    for col in df.columns:
+        col_type = df[col].dtype
+        c_min = df[col].min()
+        c_max = df[col].max()
+        if col_type in Numeric_Int_types:
+            if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
+                df = df.with_columns(df[col].cast(pl.Int8))
+            elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
+                df = df.with_columns(df[col].cast(pl.Int16))
+            elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
+                df = df.with_columns(df[col].cast(pl.Int32))
+            elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
+                df = df.with_columns(df[col].cast(pl.Int64))
+
+        elif col_type in Numeric_Float_types:
+            if c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
+                df = df.with_columns(df[col].cast(pl.Float32))
+            else:
+                pass
+        elif col_type == pl.Utf8:
+            df = df.with_columns(df[col].cast(pl.Categorical))
+        else:
+            pass
+    # mem_usg = df.estimated_size("mb")
+    # print("Memory usage became: ",mem_usg," MB")
+    return df
 
 @st.cache_resource(show_spinner=True)
 class CatboostModel:
@@ -121,30 +150,29 @@ class CatboostModel:
             return json.load(f)
     
     def load_data(self):
-        df_train = reduce_mem_usage(pd.read_csv('data/train_AIC.csv'))
-        df_train = pl.from_pandas(df_train)
-        df_test = pl.from_pandas(reduce_mem_usage(pd.read_csv('data/test_AIC.csv')))
+        df_train = reduce_mem_usage_pl(pl.read_csv('data/train_AIC.csv'))
+        df_test = reduce_mem_usage_pl(pl.read_csv('data/test_AIC.csv'))
 
-        df_train = df_train.with_columns([
-            pl.col('Поставщик').cast(pl.Int16),
-            pl.col('Материал').cast(pl.UInt16),
-            pl.col('Категорийный менеджер').cast(pl.Int8),
-            pl.col('Операционный менеджер').cast(pl.Int8),
-            pl.col('Завод').cast(pl.Int8),
-            pl.col('Закупочная организация').cast(pl.Int8),
-            pl.col('Группа закупок').cast(pl.Int16),
-            pl.col('Балансовая единица').cast(pl.Int8),
-            pl.col('ЕИ').cast(pl.Int8)
-        ])
-        
+        # df_train = df_train.with_columns([
+        #     pl.col('Поставщик').cast(pl.Int16),
+        #     pl.col('Материал').cast(pl.UInt16),
+        #     pl.col('Категорийный менеджер').cast(pl.Int8),
+        #     pl.col('Операционный менеджер').cast(pl.Int8),
+        #     pl.col('Завод').cast(pl.Int8),
+        #     pl.col('Закупочная организация').cast(pl.Int8),
+        #     pl.col('Группа закупок').cast(pl.Int16),
+        #     pl.col('Балансовая единица').cast(pl.Int8),
+        #     pl.col('ЕИ').cast(pl.Int8)
+        # ])
+
         df_train = self.process_data(df_train)
         df_test = self.process_data(df_test)
 
         self.train_data = df_train
         self.test_data = df_test
-            
+
         return df_train, df_test, self.load_supp_stat()
-    
+
     def process_data(self, df: pl.DataFrame) -> pl.DataFrame:
         # if self.model_type == 'Catboost (Наивысшая точность)':
         #     df = preprocess_df(df)
@@ -160,17 +188,17 @@ class CatboostModel:
     def predict(self, df: pl.DataFrame) -> np.ndarray:
         if len(df.shape) == 1:
             df = pl.DataFrame([df])
-            
+
         df = self.process_data(df)
         df = df.with_columns([
             pl.col(self.cat_fts).cast(pl.Utf8)
         ])
         df_pandas = df.to_pandas()  # Convert to pandas for CatBoost compatibility
-        
+
         preds = self.model.predict_proba(Pool(df_pandas[self.model.feature_names_], cat_features=self.cat_fts))
         return preds
 
-
+@st.cache_resource(show_spinner=False)
 def get_similar_samples(df, sample, columns):
     # получаем из df сэмплы с такими же значениями, как у sample, по колонкам columns
     # df будет трейном, выбор сэмпла делаем на платформе, columns тоже должен выбирать пользователь
@@ -178,7 +206,6 @@ def get_similar_samples(df, sample, columns):
     query_str = ' and '.join([f"`{key}` == {val}" for key, val in sample.items()])
     return df.query(query_str)
 
-    
 def get_shap_values(df, model, cat_fts):
     explainer = shap.TreeExplainer(model)
     test_pool = Pool(df.drop('y', axis=1), df['y'], cat_features=cat_fts)
@@ -186,49 +213,87 @@ def get_shap_values(df, model, cat_fts):
     return shap_values, explainer
 
 
-@st.cache_resource(show_spinner=False)
-def get_shap_percentage_plot(shap_values, feature_names, threshold=1.0):
+# @st.cache_resource(show_spinner=False)
+# def get_shap_percentage_plot(shap_values, feature_names, threshold=1.0):
+#     total_sum = np.sum(np.abs(shap_values))
+#     shap_values = (shap_values / total_sum) * 100
+
+#     filtered_indices = np.abs(shap_values) > threshold
+#     shap_values_filtered = shap_values[filtered_indices]
+#     feature_names_filtered = np.array(feature_names)[filtered_indices]
+
+#     sorted_indices = np.argsort(shap_values_filtered)
+#     shap_values_sorted = shap_values_filtered[sorted_indices]  * -1
+#     feature_names_sorted = feature_names_filtered[sorted_indices]
+
+#     positive_shap_values = [max(value, 0) for value in shap_values_sorted]
+#     negative_shap_values = [min(value, 0) for value in shap_values_sorted]
+
+#     fig = go.Figure()
+
+#     fig.add_trace(go.Bar(
+#         x=feature_names_sorted,
+#         y=positive_shap_values,
+#         marker_color='green',
+#         name='Позитивный эффект (поставка придет во время)'
+#     ))
+
+#     fig.add_trace(go.Bar(
+#         x=feature_names_sorted,
+#         y=negative_shap_values,
+#         marker_color='red',
+#         name='Негативный эффект (срыв поставки)'
+#     ))
+
+#     fig.update_layout(
+#         title="Процентное соотношение влияния признаков на вероятность срыва поставок",
+#         xaxis_title="Название признаков",
+#         yaxis_title="Относительный процент влияния",
+#         barmode='overlay',
+#         bargap=0.1,
+#         template='plotly_white',
+#         height=600
+#     )
+
+#     st.plotly_chart(fig, use_container_width=True)
+
+
+def get_shap_percentage_list(shap_values, feature_names, threshold=1.0):
     total_sum = np.sum(np.abs(shap_values))
     shap_values = (shap_values / total_sum) * 100
 
     filtered_indices = np.abs(shap_values) > threshold
     shap_values_filtered = shap_values[filtered_indices]
     feature_names_filtered = np.array(feature_names)[filtered_indices]
-    
-    sorted_indices = np.argsort(shap_values_filtered)
-    shap_values_sorted = shap_values_filtered[sorted_indices]  * -1
-    feature_names_sorted = feature_names_filtered[sorted_indices]
-    
-    positive_shap_values = [value if value > 0 else 0 for value in shap_values_sorted]
-    negative_shap_values = [value if value < 0 else 0 for value in shap_values_sorted]
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Bar(
-        x=feature_names_sorted,
-        y=positive_shap_values,
-        marker_color='green',
-        name='Позитивный эффект (поставка придет во время)'
-    ))
-    
-    fig.add_trace(go.Bar(
-        x=feature_names_sorted,
-        y=negative_shap_values,
-        marker_color='red',
-        name='Негативный эффект (срыв поставки)'
-    ))
-    
-    fig.update_layout(
-        title="Процентное соотношение влияния признаков на вероятность срыва поставок",
-        xaxis_title="Название признаков",
-        yaxis_title="Относительный процент влияния",
-        barmode='overlay',
-        bargap=0.1,
-        template='plotly_white',
-        height=600
-    )
 
-    st.plotly_chart(fig, use_container_width=True)
+    sorted_indices = np.argsort(shap_values_filtered)
+    shap_values_sorted = shap_values_filtered[sorted_indices] # * -1
+    feature_names_sorted = feature_names_filtered[sorted_indices]
+
+    positive_shap_values = [max(value, 0) for value in shap_values_sorted]
+    negative_shap_values = [min(value, 0) for value in shap_values_sorted]
+
+    top_increasing_risk = [
+        f"**{feature}** на {abs(value):.1f}%"
+        for feature, value in zip(feature_names_sorted[:5], negative_shap_values[:5])
+        if value < 0
+    ]
+
+    top_decreasing_risk = [
+        f"**{feature}** на {abs(value):.1f}%"
+        for feature, value in zip(feature_names_sorted[-5:], positive_shap_values[-5:])
+        if value > 0
+    ][::-1]
+
+    print(top_increasing_risk)
+    st.markdown("### <span style='color:red'>&#x2193;</span> Факторы, увличивающие риск срыва поставки:", unsafe_allow_html=True)
+    for item in top_increasing_risk:
+        st.write(f"- {item}")
+
+    st.markdown("### <span style='color:green'>&#x2191;</span> Факторы, уменьшающие риск срыва поставки:", unsafe_allow_html=True)
+    for item in top_decreasing_risk:
+        st.write(f"- {item}")
+
 
 
 @st.cache_resource(show_spinner=False)
@@ -236,12 +301,12 @@ def get_cat_counts_plot(df, sample, columns_to_draw):
     plot_df = []
     for col in columns_to_draw:
         temp_df = df[df[col] == int(sample[col])]['y'].value_counts()
-        print(col, temp_df)
+        # print(col, temp_df)
         plot_df.append({'Признак': col, 'В срок': np.log1p(temp_df[0]), 'Просрочка': np.log1p(temp_df[1])})
-        
+
     plot_df = pd.DataFrame(plot_df)
-    print('plot_df', plot_df)
-    
+    # print('plot_df', plot_df)
+
     fig = px.bar(plot_df, 
                  x='Признак', 
                  y=['В срок', 'Просрочка'], 
@@ -345,8 +410,8 @@ with st.expander("Загрузка файла"):
     uploaded_file = st.file_uploader(label='Загрузите файл с данными для анализа', accept_multiple_files=False, type=['csv'])
     if uploaded_file is not None:
         # Can be used wherever a "file-like" object is accepted:
-        test = pl.from_pandas(reduce_mem_usage(pd.read_csv(uploaded_file)))
-        print(test)
+        test = reduce_mem_usage_pl(pl.read_csv(uploaded_file))
+        # print(test)
         st.session_state.clicked1 = st.button('Получить прогнозирование и анализ ', type='primary', use_container_width=True)
         st.session_state.test = test
 
@@ -355,14 +420,14 @@ with st.expander("Ручной ввод данных"):
 
     df = pd.read_csv('inp_template.csv')
     edited_df = st.data_editor(df, num_rows='dynamic', hide_index=True, use_container_width=True, key=f'editor_{st.session_state.key}')
-    edited_df = reduce_mem_usage(edited_df)
+    # edited_df = reduce_mem_usage(edited_df)
 
     col1, col2 = st.columns(2)
     col1.button('Очистить таблицу', on_click=reset, type='secondary', use_container_width=True)
     st.session_state.clicked2 = col2.button('Получить прогнозирование и анализ', type='primary', use_container_width=True)
 
     if st.session_state.clicked2:
-        test = pl.from_pandas(edited_df)
+        test = reduce_mem_usage_pl(pl.from_pandas(edited_df))
         st.session_state.test = test
 
 with st.expander("Доступ по API"):
@@ -444,7 +509,7 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
     st.session_state.clicked = True
     tab1, tab2 = st.tabs(['Анализ прогнозирования модели', 'Анализ поставки'])
 
-    with tab1:  
+    with tab1:
 
         if isinstance(st.session_state.test, pd.DataFrame):
             st.session_state.test = pl.from_pandas(st.session_state.test)
@@ -466,7 +531,7 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
             confidence = round(np.max(preds)*100)
 
         st.session_state.test['Прогноз'] = predicted_class
-        
+
         supp_rating_risk = {
             1: 30,
             2: 20,
@@ -474,7 +539,7 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
             4: 5,
             5: 1
         }
-        
+
         def time_to_risk(x):
             if x < 15:
                 return 10
@@ -561,7 +626,7 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
         columns_to_query =  ['Поставщик', 'Материал']
 
         similar_samples = get_similar_samples(df_train, sample, columns_to_query)
-        print(similar_samples.shape)
+        # print(similar_samples.shape)
 
         if len(similar_samples) < 40:
             similar_samples = get_similar_samples(df_train, sample, ['Поставщик'])
@@ -573,8 +638,11 @@ if st.session_state.clicked1 or st.session_state.clicked2 or st.session_state.cl
         feature_names = [cols_le[x] for x in feature_names]
 
         st.divider()
-        
-        get_shap_percentage_plot(shap_values[0], feature_names, threshold=1.0)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            get_shap_percentage_list(shap_values[0], feature_names, threshold=1.0)
 
         st.divider() 
 
